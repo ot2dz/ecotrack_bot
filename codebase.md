@@ -186,6 +186,8 @@ import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { setupSession } from './middlewares/session.js';
 import { createOrderScene } from './scenes/createOrder.js';
+import { fetchLatestMaj, addMajNote, fetchTrackingInfo, filterOrdersByStatus } from '../services/track.service.js';
+import { formatLatestMaj, formatTrackingInfo, formatOrderList } from './ui/formatters.js';
 
 export const bot = new Telegraf<MyContext>(env.TELEGRAM_BOT_TOKEN);
 
@@ -201,9 +203,9 @@ if (env.WEB_APP_URL) {
   keyboardRows.push([Markup.button.webApp('🖥️ واجهة الطلبات', env.WEB_APP_URL)]);
 }
 
-keyboardRows.push(['🟢 رفع طلبية']);
-
-const mainKeyboard = Markup.keyboard(keyboardRows).resize();
+const mainKeyboard = keyboardRows.length > 0 
+  ? Markup.keyboard(keyboardRows).resize()
+  : Markup.removeKeyboard();
 
 const webAppPayloadSchema = z.object({
   kind: z.literal('create-order'),
@@ -309,6 +311,120 @@ export async function launchBot() {
   process.once('SIGINT', () => bot.stop('SIGINT'));
   process.once('SIGTERM', () => bot.stop('SIGTERM'));
 }
+
+// أمر تتبع أحدث MAJ: /track <tracking>
+bot.command('track', async (ctx) => {
+  try {
+    const input = ctx.message.text.trim();
+    const parts = input.split(/\s+/);
+    const tracking = parts[1];
+
+    if (!tracking) {
+      await ctx.reply('⚠️ استخدم الأمر هكذا: /track <tracking>');
+      return;
+    }
+
+    await ctx.reply('🔎 جاري جلب آخر تحديثات الطلب...');
+
+    const maj = await fetchLatestMaj(tracking);
+
+    if (!maj) {
+      await ctx.reply('ℹ️ لم يتم تسجيل تحديثات بعد لهذه الطلبية.');
+      return;
+    }
+
+    await ctx.reply(formatLatestMaj(tracking, maj));
+  } catch (error: any) {
+    const apiMsg = error?.response?.data?.message || error?.message || 'خطأ غير متوقع';
+    logger.error({ err: error }, 'track command failed');
+    await ctx.reply(`❌ تعذر جلب التحديثات: ${apiMsg}`);
+  }
+});
+
+// أمر إضافة ملاحظة: /update <tracking> <text>
+bot.command('update', async (ctx) => {
+  try {
+    const input = ctx.message.text;
+    const match = input.match(/^\/update\s+(\S+)\s+([\s\S]+)$/);
+    if (!match) {
+      await ctx.reply('⚠️ استخدم الأمر هكذا: /update <tracking> <text>');
+      return;
+    }
+    const tracking = match[1].trim();
+    const text = match[2].trim();
+
+    if (text.length > 255) {
+      await ctx.reply('⚠️ النص طويل جدًا. الرجاء ألا يتجاوز 255 حرفًا.');
+      return;
+    }
+
+    await ctx.reply('✍️ جاري إضافة الملاحظة...');
+    await addMajNote(tracking, text);
+
+    await ctx.reply(`📝 تم إضافة ملاحظة جديدة:\n"${text}"`);
+  } catch (error: any) {
+    const apiMsg = error?.response?.data?.message || error?.message || 'خطأ غير متوقع';
+    logger.error({ err: error }, 'update command failed');
+    await ctx.reply(`❌ تعذر إضافة الملاحظة: ${apiMsg}`);
+  }
+});
+
+// أمر الحالة التفصيلية: /status <tracking>
+bot.command('status', async (ctx) => {
+  try {
+    const input = ctx.message.text.trim();
+    const parts = input.split(/\s+/);
+    const tracking = parts[1];
+
+    if (!tracking) {
+      await ctx.reply('⚠️ استخدم الأمر هكذا: /status <tracking>');
+      return;
+    }
+
+    await ctx.reply('📊 جاري جلب الحالة التفصيلية...');
+
+    const info = await fetchTrackingInfo(tracking);
+
+    await ctx.reply(formatTrackingInfo(info));
+  } catch (error: any) {
+    const apiMsg = error?.response?.data?.message || error?.message || 'خطأ غير متوقع';
+    logger.error({ err: error }, 'status command failed');
+    await ctx.reply(`❌ تعذر جلب الحالة: ${apiMsg}`);
+  }
+});
+
+// أمر فلترة الطلبات: /filter <status1,status2,...> [trackings optional]
+bot.command('filter', async (ctx) => {
+  try {
+    const input = ctx.message.text;
+    const m = input.match(/^\/filter\s+([^\s]+)(?:\s+([^\s]+))?$/);
+    if (!m) {
+      await ctx.reply('⚠️ استخدم: /filter <status1,status2,...> [trackings اختياري مفصول بفواصل]');
+      return;
+    }
+
+    const statuses = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+    const trackings = m[2]?.split(',').map((t) => t.trim()).filter(Boolean);
+
+    await ctx.reply('🗂️ جاري جلب القائمة المطابقة...');
+
+    const items = await filterOrdersByStatus(statuses, trackings);
+
+    if (!items.length) {
+      await ctx.reply('ℹ️ لا توجد طلبيات مطابقة.');
+      return;
+    }
+
+    const groups = formatOrderList(items);
+    for (const msg of groups) {
+      await ctx.reply(msg);
+    }
+  } catch (error: any) {
+    const apiMsg = error?.response?.data?.message || error?.message || 'خطأ غير متوقع';
+    logger.error({ err: error }, 'filter command failed');
+    await ctx.reply(`❌ تعذر جلب القائمة: ${apiMsg}`);
+  }
+});
 
 ```
 
@@ -686,6 +802,62 @@ export type MyContext = Omit<Scenes.SceneContext<MySceneSession>, 'session' | 's
 
 ```
 
+# src/bot/ui/formatters.ts
+
+```ts
+export function formatLatestMaj(tracking: string, maj: { station?: string; driver?: string; note?: string; date?: string }): string {
+  const lines: string[] = [];
+  lines.push(`📦 رقم التتبع: ${tracking}`);
+  if (maj.station) lines.push(`🏬 المحطة: ${maj.station}`);
+  if (maj.driver) lines.push(`🚚 السائق: ${maj.driver}`);
+  if (maj.note) lines.push(`💬 ملاحظات: ${maj.note}`);
+  if (maj.date) lines.push(`🕓 التاريخ: ${maj.date}`);
+  return lines.join('\n');
+}
+
+export function formatTrackingInfo(info: { tracking: string; currentStatus?: string; lastUpdate?: string; history?: Array<{ status: string; at: string }> }): string {
+  const lines: string[] = [];
+  lines.push(`📦 ${info.tracking}`);
+  if (info.currentStatus) lines.push(`🧾 الحالة الحالية: ${info.currentStatus}`);
+  if (info.lastUpdate) lines.push(`🕓 آخر تحديث: ${info.lastUpdate}`);
+
+  if (info.history && info.history.length) {
+    lines.push('\n🔄 سجل الحالات:');
+    for (const item of info.history) {
+      const s = item.status?.toLowerCase() || '';
+      const icon = s.includes('livr') ? '🧍' : s.includes('hub') ? '🏢' : s.includes('recup') ? '🚚' : s.includes('enreg') ? '✅' : '•';
+      lines.push(`${icon} ${item.status} - ${item.at}`);
+    }
+  } else {
+    lines.push('\nℹ️ لا يوجد سجل حالات متوفر.');
+  }
+
+  return lines.join('\n');
+}
+
+export function formatOrderList(items: Array<{ tracking: string; status?: string; commune?: string; lastActivity?: string }>): string[] {
+  const chunks: string[][] = [[]];
+  for (const it of items) {
+    const line = [
+      `📦 ${it.tracking} — ${it.status || '—'}`,
+      it.commune ? `🏙️ Commune: ${it.commune}` : undefined,
+      it.lastActivity ? `🕓 Dernière activité: ${it.lastActivity}` : undefined,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    if ((chunks[chunks.length - 1].join('\n\n') + line).length > 3500) {
+      chunks.push([line]);
+    } else {
+      chunks[chunks.length - 1].push(line);
+    }
+  }
+
+  return chunks.map((group) => group.join('\n\n'));
+}
+
+```
+
 # src/bot/ui/index.ts
 
 ```ts
@@ -839,6 +1011,55 @@ export async function getCommunes(wilayaId: number) {
   }
 }
 
+export async function getLatestMaj(tracking: string) {
+  try {
+    const res = await ecoClient.get(`/api/v1/get/maj`, { params: { tracking } });
+    logger.debug({ tracking }, 'Fetched latest MAJ');
+    return res.data;
+  } catch (err: any) {
+    logger.error({ err: err?.response?.data || err?.message }, '❌ Failed to fetch latest MAJ');
+    throw err;
+  }
+}
+
+export async function addMajNote(tracking: string, content: string) {
+  try {
+    const res = await ecoClient.post(`/api/v1/add/maj`, null, { params: { tracking, content } });
+    logger.debug({ tracking }, 'Added MAJ note');
+    return res.data;
+  } catch (err: any) {
+    logger.error({ err: err?.response?.data || err?.message }, '❌ Failed to add MAJ note');
+    throw err;
+  }
+}
+
+export async function getTrackingInfo(tracking: string) {
+  try {
+    const res = await ecoClient.get(`/api/v1/get/tracking/info`, { params: { tracking } });
+    logger.debug({ tracking }, 'Fetched tracking info');
+    return res.data;
+  } catch (err: any) {
+    logger.error({ err: err?.response?.data || err?.message }, '❌ Failed to fetch tracking info');
+    throw err;
+  }
+}
+
+export async function getOrdersByStatus(options: { statuses: string[]; trackings?: string[]; apiToken?: string }) {
+  try {
+    const params: Record<string, string> = {};
+    if (options.statuses?.length) params.status = options.statuses.join(',');
+    if (options.trackings?.length) params.trackings = options.trackings.join(',');
+    if (options.apiToken) params.api_token = options.apiToken;
+
+    const res = await ecoClient.get(`/api/v1/get/orders/status`, { params });
+    logger.debug({ statuses: params.status, trackings: params.trackings }, 'Fetched orders by status');
+    return res.data;
+  } catch (err: any) {
+    logger.error({ err: err?.response?.data || err?.message }, '❌ Failed to fetch orders by status');
+    throw err;
+  }
+}
+
 ```
 
 # src/ecotrack/types.ts
@@ -961,6 +1182,165 @@ export async function createOrder(order: CreateOrderPayload) {
   }
 }
 
+
+```
+
+# src/services/track.service.ts
+
+```ts
+import { getLatestMaj, addMajNote as addMajNoteEndpoint, getTrackingInfo as getTrackingInfoEndpoint, getOrdersByStatus as getOrdersByStatusEndpoint } from '../ecotrack/endpoints.js';
+import { logger } from '../utils/logger.js';
+import { env } from '../config/env.js';
+
+// بسيط: كاش بالذاكرة لنتائج /status لمدة قصيرة لتقليل الضغط
+const trackingInfoCache = new Map<string, { value: TrackingInfo; expiresAt: number }>();
+const TRACKING_INFO_TTL_MS = 30_000; // 30 ثانية
+
+export type LatestMaj = {
+  station?: string;
+  driver?: string;
+  note?: string;
+  date?: string;
+};
+
+export type TrackingHistoryItem = {
+  status: string;
+  at: string;
+};
+
+export type TrackingInfo = {
+  tracking: string;
+  currentStatus?: string;
+  lastUpdate?: string;
+  history: TrackingHistoryItem[];
+};
+
+export type OrderListItem = {
+  tracking: string;
+  status?: string;
+  commune?: string;
+  lastActivity?: string;
+};
+
+export async function fetchLatestMaj(tracking: string): Promise<LatestMaj | null> {
+  const trimmed = tracking?.trim();
+  if (!trimmed) throw new Error('Tracking is required');
+
+  try {
+    const data = await getLatestMaj(trimmed);
+    if (!data) return null;
+
+    const result: LatestMaj = {
+      station: data.station || data.hub || data.office || data.site || undefined,
+      driver: data.driver || data.livreur || data.agent || undefined,
+      note: data.note || data.remark || data.comment || undefined,
+      date: data.date || data.updated_at || data.timestamp || undefined,
+    };
+
+    const allEmpty = Object.values(result).every((v) => !v);
+    if (allEmpty) return null;
+
+    return result;
+  } catch (err: any) {
+    logger.error({ err }, 'fetchLatestMaj failed');
+    throw err;
+  }
+}
+
+export async function addMajNote(tracking: string, content: string): Promise<void> {
+  const t = tracking?.trim();
+  const c = content?.trim();
+  if (!t) throw new Error('Tracking is required');
+  if (!c) throw new Error('Note content is required');
+  if (c.length > 255) throw new Error('Note must be 255 characters or fewer');
+
+  try {
+    await addMajNoteEndpoint(t, c);
+  } catch (err: any) {
+    logger.error({ err }, 'addMajNote failed');
+    throw err;
+  }
+}
+
+export async function fetchTrackingInfo(tracking: string): Promise<TrackingInfo> {
+  const t = tracking?.trim();
+  if (!t) throw new Error('Tracking is required');
+
+  const cached = trackingInfoCache.get(t);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  try {
+    const data = await getTrackingInfoEndpoint(t);
+    const info: TrackingInfo = {
+      tracking: t,
+      currentStatus: data?.current_status || data?.status || data?.etat || undefined,
+      lastUpdate: data?.last_update || data?.updated_at || data?.timestamp || undefined,
+      history: [],
+    };
+
+    const rawHistory = data?.history || data?.timeline || data?.events || [];
+    if (Array.isArray(rawHistory)) {
+      info.history = rawHistory.map((it: any) => ({
+        status: it.status || it.state || it.etat || 'unknown',
+        at: it.at || it.date || it.timestamp || '',
+      }));
+    }
+
+    trackingInfoCache.set(t, { value: info, expiresAt: now + TRACKING_INFO_TTL_MS });
+    return info;
+  } catch (err: any) {
+    logger.error({ err }, 'fetchTrackingInfo failed');
+    throw err;
+  }
+}
+
+export async function filterOrdersByStatus(statuses: string[], trackings?: string[], apiToken?: string): Promise<OrderListItem[]> {
+  if (!Array.isArray(statuses) || statuses.length === 0) {
+    throw new Error('至少 حالة واحدة مطلوبة');
+  }
+  try {
+    const token = apiToken || env.ECOTRACK_API_KEY; // تمرير api_token إذا تطلبه الEndpoint
+    const data = await getOrdersByStatusEndpoint({ statuses, trackings, apiToken: token });
+
+    const payload = data?.data ?? data;
+
+    // الحالة 1: مصفوفة عناصر
+    if (Array.isArray(payload)) {
+      return payload.map((it: any) => ({
+        tracking: it.tracking || it.code || it.ref || '',
+        status: it.status || it.etat || it.state || undefined,
+        commune: it.commune || it.city || undefined,
+        lastActivity: it.last_activity || it.updated_at || it.date || undefined,
+      }));
+    }
+
+    // الحالة 2: كائن مَعنون بالمفاتيح = tracking
+    if (payload && typeof payload === 'object') {
+      const result: OrderListItem[] = [];
+      for (const [key, val] of Object.entries(payload as Record<string, any>)) {
+        const obj = val as any;
+        const lastActivity = Array.isArray(obj.activity) && obj.activity.length
+          ? `${obj.activity[0]?.date ?? ''} ${obj.activity[0]?.time ?? ''}`.trim()
+          : undefined;
+        result.push({
+          tracking: key,
+          status: obj.status || obj.etat || obj.state || undefined,
+          commune: obj.commune || obj.city || undefined,
+          lastActivity,
+        });
+      }
+      return result;
+    }
+
+    return [];
+  } catch (err: any) {
+    logger.error({ err }, 'filterOrdersByStatus failed');
+    throw err;
+  }
+}
 
 ```
 
