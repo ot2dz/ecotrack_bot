@@ -1,0 +1,43 @@
+{
+  "name": "ecotrack",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --watch src --exec tsx src/app.ts",
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "webapp:build": "tsc src/webapp/main.ts --target ES2020 --module ESNext --moduleResolution Bundler --outDir src/webapp",
+    "webapp:serve": "npm run webapp:build && npx serve src/webapp"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@types/express": "^5.0.5",
+    "axios": "^1.13.1",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "node-cache": "^5.1.2",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "telegraf": "^4.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^24.9.2",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-unused-imports": "^4.3.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.6",
+    "nodemon": "^3.1.10",
+    "prettier": "^3.6.2",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2"
+  }
+}
