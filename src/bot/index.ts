@@ -4,6 +4,7 @@ import { MyContext, OrderData } from './types/context.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { setupSession } from './middlewares/session.js';
+import { authMiddleware } from './middlewares/auth.js';
 import { createOrderScene } from './scenes/createOrder.js';
 import { fetchLatestMaj, addMajNote, fetchTrackingInfo, filterOrdersByStatus } from '../services/track.service.js';
 import { formatLatestMaj, formatTrackingInfo, formatOrderList } from './ui/formatters.js';
@@ -13,6 +14,7 @@ export const bot = new Telegraf<MyContext>(env.TELEGRAM_BOT_TOKEN);
 // إعداد المشاهد (Scenes)
 const stage = new Scenes.Stage<MyContext>([createOrderScene]);
 bot.use(setupSession());
+bot.use(authMiddleware);
 bot.use(stage.middleware());
 
 // لوحة البداية

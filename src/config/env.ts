@@ -15,6 +15,7 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   WEB_APP_URL: z.string().url('WEB_APP_URL must be a valid URL').optional(),
+  ALLOWED_USER_IDS: z.string().optional(),
 });
 
 // نتحقق من القيم
