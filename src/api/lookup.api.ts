@@ -67,6 +67,15 @@ export function createLookupAPI(port: number = env.PORT) {
   const staticPath = existsSync(webappPath) ? webappPath : altWebappPath;
   app.use(express.static(staticPath));
   logger.info(`Serving static files from: ${staticPath}`);
+  // معالج للمسار الرئيسي لضمان عرض الواجهة
+app.get('/', (req, res) => {
+  res.sendFile(join(staticPath, 'index.html'), (err) => {
+    if (err) {
+      logger.error({ err }, 'Failed to send index.html');
+      res.status(500).send('Could not load the web application.');
+    }
+  });
+});
 
   const server = app.listen(port, () => {
     logger.info(`✅ Web App & API server running on port ${port}`);

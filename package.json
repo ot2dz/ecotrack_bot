@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon --watch src --exec tsx src/app.ts",
-    "build": "tsc && cp -r src/webapp dist/webapp",
+    "build": "tsc && cp -r src/webapp dist/",
     "start": "node dist/app.js",
     "webapp:build": "tsc src/webapp/main.ts --target ES2020 --module ESNext --moduleResolution Bundler --outDir src/webapp",
     "webapp:serve": "npm run webapp:build && npx serve src/webapp"
