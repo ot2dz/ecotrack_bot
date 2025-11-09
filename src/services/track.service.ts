@@ -23,7 +23,25 @@ export type TrackingInfo = {
   currentStatus?: string;
   lastUpdate?: string;
   history: TrackingHistoryItem[];
+  
+  // ⚡ إضافة الحقول الجديدة من API الحقيقي
+  recipientName?: string;
+  shippedBy?: string;
+  originCity?: number;
+  destLocationCity?: number;
+  currentStation?: string;
+  activity?: ActivityItem[];
+  reasons?: any[];
 };
+// ⚡ تعريف نوع جديد للنشاطات من API
+export type ActivityItem = {
+  date: string;
+  time: string;
+  status: string;
+  station?: string;
+  scanLocation?: string;
+};
+
 
 export type OrderListItem = {
   tracking: string;
@@ -32,19 +50,27 @@ export type OrderListItem = {
   lastActivity?: string;
 };
 
+// في src/services/track.service.ts
 export async function fetchLatestMaj(tracking: string): Promise<LatestMaj | null> {
   const trimmed = tracking?.trim();
   if (!trimmed) throw new Error('Tracking is required');
 
   try {
-    const data = await getLatestMaj(trimmed);
-    if (!data) return null;
+    // ⚡ التغيير الجوهري: استخدام fetchTrackingInfo بدلاً من getLatestMaj
+    const data = await fetchTrackingInfo(trimmed);
+    
+    if (!data?.activity || !Array.isArray(data.activity) || data.activity.length === 0) {
+      return null;
+    }
 
+    // أخذ آخر نشاط من array activity
+    const latestActivity = data.activity[data.activity.length - 1];
+    
     const result: LatestMaj = {
-      station: data.station || data.hub || data.office || data.site || undefined,
-      driver: data.driver || data.livreur || data.agent || undefined,
-      note: data.note || data.remark || data.comment || undefined,
-      date: data.date || data.updated_at || data.timestamp || undefined,
+      station: latestActivity.station || data.currentStation || undefined,
+      driver: data.shippedBy || undefined,
+      note: latestActivity.status || undefined,
+      date: latestActivity.date ? `${latestActivity.date} ${latestActivity.time || ''}`.trim() : undefined,
     };
 
     const allEmpty = Object.values(result).every((v) => !v);
@@ -52,11 +78,10 @@ export async function fetchLatestMaj(tracking: string): Promise<LatestMaj | null
 
     return result;
   } catch (err: any) {
-    logger.error({ err }, 'fetchLatestMaj failed');
+    logger.error({ err, tracking: trimmed }, 'fetchLatestMaj failed');
     throw err;
   }
 }
-
 export async function addMajNote(tracking: string, content: string): Promise<void> {
   const t = tracking?.trim();
   const c = content?.trim();
@@ -72,6 +97,7 @@ export async function addMajNote(tracking: string, content: string): Promise<voi
   }
 }
 
+// في src/services/track.service.ts - تحديث الدالة الحالية
 export async function fetchTrackingInfo(tracking: string): Promise<TrackingInfo> {
   const t = tracking?.trim();
   if (!t) throw new Error('Tracking is required');
@@ -84,18 +110,30 @@ export async function fetchTrackingInfo(tracking: string): Promise<TrackingInfo>
 
   try {
     const data = await getTrackingInfoEndpoint(t);
+    
+    // ⚡ تحديث لمعالجة البيانات الجديدة
     const info: TrackingInfo = {
       tracking: t,
       currentStatus: data?.current_status || data?.status || data?.etat || undefined,
       lastUpdate: data?.last_update || data?.updated_at || data?.timestamp || undefined,
       history: [],
+      
+      // الحقول الجديدة من API
+      recipientName: data?.recipientName,
+      shippedBy: data?.shippedBy,
+      originCity: data?.originCity,
+      destLocationCity: data?.destLocationCity,
+      currentStation: data?.currentStation,
+      activity: data?.activity,
+      reasons: data?.reasons,
     };
 
-    const rawHistory = data?.history || data?.timeline || data?.events || [];
+    // ⚡ تحويل activity إلى history إذا لزم الأمر
+    const rawHistory = data?.history || data?.timeline || data?.events || data?.activity || [];
     if (Array.isArray(rawHistory)) {
       info.history = rawHistory.map((it: any) => ({
         status: it.status || it.state || it.etat || 'unknown',
-        at: it.at || it.date || it.timestamp || '',
+        at: it.at || it.date || it.timestamp || `${it.date || ''} ${it.time || ''}`.trim(),
       }));
     }
 
@@ -106,7 +144,6 @@ export async function fetchTrackingInfo(tracking: string): Promise<TrackingInfo>
     throw err;
   }
 }
-
 export async function filterOrdersByStatus(statuses: string[], trackings?: string[], apiToken?: string): Promise<OrderListItem[]> {
   if (!Array.isArray(statuses) || statuses.length === 0) {
     throw new Error('至少 حالة واحدة مطلوبة');
@@ -148,6 +185,33 @@ export async function filterOrdersByStatus(statuses: string[], trackings?: strin
     return [];
   } catch (err: any) {
     logger.error({ err }, 'filterOrdersByStatus failed');
+    throw err;
+  }
+}
+// في src/services/track.service.ts
+export async function fetchLatestActivity(tracking: string): Promise<LatestMaj | null> {
+  const trimmed = tracking?.trim();
+  if (!trimmed) throw new Error('Tracking is required');
+
+  try {
+    const data = await fetchTrackingInfo(trimmed);
+    
+    // ✅ الآن activity معرفة في TrackingInfo
+    if (!data?.activity || !Array.isArray(data.activity) || data.activity.length === 0) {
+      return null;
+    }
+
+    // أخذ آخر نشاط (الأحدث)
+    const latest = data.activity[data.activity.length - 1];
+    
+    return {
+      station: latest.station || data.currentStation || undefined,
+      driver: data.shippedBy || undefined, // ✅ الآن shippedBy معرف
+      note: latest.status || undefined,
+      date: latest.date ? `${latest.date} ${latest.time || ''}`.trim() : undefined,
+    };
+  } catch (err: any) {
+    logger.error({ err, tracking: trimmed }, 'fetchLatestActivity failed');
     throw err;
   }
 }

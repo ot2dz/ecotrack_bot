@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 import { setupSession } from './middlewares/session.js';
 import { authMiddleware } from './middlewares/auth.js';
 import { createOrderScene } from './scenes/createOrder.js';
-import { fetchLatestMaj, addMajNote, fetchTrackingInfo, filterOrdersByStatus } from '../services/track.service.js';
+import { fetchLatestMaj, addMajNote, fetchTrackingInfo, filterOrdersByStatus, fetchLatestActivity } from '../services/track.service.js';
 import { formatLatestMaj, formatTrackingInfo, formatOrderList } from './ui/formatters.js';
 
 export const bot = new Telegraf<MyContext>(env.TELEGRAM_BOT_TOKEN);
@@ -132,19 +132,19 @@ export async function launchBot() {
   process.once('SIGINT', () => bot.stop('SIGINT'));
   process.once('SIGTERM', () => bot.stop('SIGTERM'));
 }
-
-// أمر تتبع أحدث MAJ: /track <tracking>
+// في src/bot/index.ts - نسخة محسنة
 bot.command('track', async (ctx) => {
+  // استخراج tracking مرة واحدة في بداية الدالة
+  const input = ctx.message.text.trim();
+  const parts = input.split(/\s+/);
+  const tracking = parts[1];
+
+  if (!tracking) {
+    await ctx.reply('⚠️ استخدم الأمر هكذا: /track <tracking>');
+    return;
+  }
+
   try {
-    const input = ctx.message.text.trim();
-    const parts = input.split(/\s+/);
-    const tracking = parts[1];
-
-    if (!tracking) {
-      await ctx.reply('⚠️ استخدم الأمر هكذا: /track <tracking>');
-      return;
-    }
-
     await ctx.reply('🔎 جاري جلب آخر تحديثات الطلب...');
 
     const maj = await fetchLatestMaj(tracking);
@@ -157,7 +157,7 @@ bot.command('track', async (ctx) => {
     await ctx.reply(formatLatestMaj(tracking, maj));
   } catch (error: any) {
     const apiMsg = error?.response?.data?.message || error?.message || 'خطأ غير متوقع';
-    logger.error({ err: error }, 'track command failed');
+    logger.error({ err: error, tracking }, 'track command failed');
     await ctx.reply(`❌ تعذر جلب التحديثات: ${apiMsg}`);
   }
 });
